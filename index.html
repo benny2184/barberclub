@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BarberClub — Carta Fedeltà Digitale</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, doc, getDoc, setDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // =============================================
+    // 🔧 SOSTITUISCI CON LA TUA CONFIGURAZIONE FIREBASE
+    // =============================================
+    const firebaseConfig = {
+      apiKey: "LA_TUA_API_KEY",
+      authDomain: "IL_TUO_PROGETTO.firebaseapp.com",
+      projectId: "IL_TUO_PROGETTO",
+      storageBucket: "IL_TUO_PROGETTO.appspot.com",
+      messagingSenderId: "IL_TUO_SENDER_ID",
+      appId: "IL_TUO_APP_ID"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // =============================================
+    // UTILITY
+    // =============================================
+    function normalizePhone(phone) {
+      return phone.replace(/\s+/g, '').replace(/^(\+39|0039)/, '');
+    }
+
+    async function getSettings() {
+      const snap = await getDoc(doc(db, 'settings', 'config'));
+      if (snap.exists()) return snap.data();
+      return { maxTimbri: 10, sconto: 'Taglio gratis', nomeSalone: 'BarberClub' };
+    }
+
+    // =============================================
+    // REGISTRAZIONE
+    // =============================================
+    window.registerCliente = async function() {
+      const nome = document.getElementById('reg-nome').value.trim();
+      const telefono = normalizePhone(document.getElementById('reg-telefono').value.trim());
+      const errEl = document.getElementById('reg-error');
+
+      if (!nome || !telefono) { errEl.textContent = 'Inserisci nome e telefono.'; return; }
+      if (telefono.length < 9) { errEl.textContent = 'Numero di telefono non valido.'; return; }
+
+      errEl.textContent = '';
+      const btn = document.getElementById('reg-btn');
+      btn.disabled = true; btn.textContent = 'Attendere...';
+
+      try {
+        const clienteRef = doc(db, 'clienti', telefono);
+        const snap = await getDoc(clienteRef);
+        if (snap.exists()) {
+          errEl.textContent = 'Questo numero è già registrato. Accedi invece.';
+          btn.disabled = false; btn.textContent = 'Registrati';
+          return;
+        }
+        await setDoc(clienteRef, { nome, telefono, timbri: 0, dataRegistrazione: new Date().toISOString() });
+        localStorage.setItem('cliente_telefono', telefono);
+        localStorage.setItem('cliente_nome', nome);
+        showCarta(telefono, nome, 0);
+      } catch (e) {
+        errEl.textContent = 'Errore: ' + e.message;
+        btn.disabled = false; btn.textContent = 'Registrati';
+      }
+    };
+
+    // =============================================
+    // LOGIN
+    // =============================================
+    window.loginCliente = async function() {
+      const telefono = normalizePhone(document.getElementById('login-telefono').value.trim());
+      const errEl = document.getElementById('login-error');
+
+      if (!telefono) { errEl.textContent = 'Inserisci il numero di telefono.'; return; }
+
+      errEl.textContent = '';
+      const btn = document.getElementById('login-btn');
+      btn.disabled = true; btn.textContent = 'Attendere...';
+
+      try {
+        const snap = await getDoc(doc(db, 'clienti', telefono));
+        if (!snap.exists()) {
+          errEl.textContent = 'Numero non trovato. Registrati prima.';
+          btn.disabled = false; btn.textContent = 'Accedi';
+          return;
+        }
+        const data = snap.data();
+        localStorage.setItem('cliente_telefono', telefono);
+        localStorage.setItem('cliente_nome', data.nome);
+        showCarta(telefono, data.nome, data.timbri);
+      } catch (e) {
+        errEl.textContent = 'Errore: ' + e.message;
+        btn.disabled = false; btn.textContent = 'Accedi';
+      }
+    };
+
+    // =============================================
+    // MOSTRA CARTA
+    // =============================================
+    async function showCarta(telefono, nome, timbri) {
+      const settings = await getSettings();
+      const max = settings.maxTimbri || 10;
+      const sconto = settings.sconto || 'Taglio gratis';
+      const nomeSalone = settings.nomeSalone || 'BarberClub';
+
+      document.getElementById('carta-nome').textContent = nome;
+      document.getElementById('carta-telefono').textContent = '+39 ' + telefono;
+      document.getElementById('carta-sconto-label').textContent = sconto;
+      document.getElementById('salone-nome-carta').textContent = nomeSalone;
+
+      // Genera i timbri
+      const grid = document.getElementById('timbri-grid');
+      grid.innerHTML = '';
+      for (let i = 0; i < max; i++) {
+        const stamp = document.createElement('div');
+        stamp.className = 'stamp ' + (i < timbri ? 'stamped' : 'empty');
+        stamp.innerHTML = i < timbri ? '✂' : '';
+        // staggered animation
+        stamp.style.animationDelay = (i * 0.05) + 's';
+        grid.appendChild(stamp);
+      }
+
+      // Aggiorna contatore
+      document.getElementById('timbri-count').textContent = timbri;
+      document.getElementById('timbri-max').textContent = max;
+
+      const progress = Math.round((timbri / max) * 100);
+      document.getElementById('progress-bar').style.width = progress + '%';
+
+      if (timbri >= max) {
+        document.getElementById('reward-banner').style.display = 'flex';
+        document.getElementById('reward-text').textContent = '🎉 Hai diritto a: ' + sconto + '!';
+      } else {
+        document.getElementById('reward-banner').style.display = 'none';
+        const mancano = max - timbri;
+        document.getElementById('mancano-text').textContent = mancano === 1 ? 'Ancora 1 visita al premio!' : `Ancora ${mancano} visite al premio!`;
+      }
+
+      showSection('carta');
+    }
+
+    // =============================================
+    // AUTO-LOGIN
+    // =============================================
+    window.addEventListener('DOMContentLoaded', async () => {
+      const settings = await getSettings();
+      document.querySelectorAll('.salone-nome').forEach(el => el.textContent = settings.nomeSalone || 'BarberClub');
+
+      const tel = localStorage.getItem('cliente_telefono');
+      const nome = localStorage.getItem('cliente_nome');
+      if (tel && nome) {
+        try {
+          const snap = await getDoc(doc(db, 'clienti', tel));
+          if (snap.exists()) {
+            showCarta(tel, snap.data().nome, snap.data().timbri);
+            return;
+          }
+        } catch(e) {}
+      }
+    });
+
+    window.logout = function() {
+      localStorage.removeItem('cliente_telefono');
+      localStorage.removeItem('cliente_nome');
+      showSection('hero');
+    };
+  </script>
+
+  <style>
+    :root {
+      --nero: #0a0a0a;
+      --oro: #c9a84c;
+      --oro-chiaro: #e8c96e;
+      --crema: #f5f0e8;
+      --grigio: #888;
+      --card-bg: #141414;
+      --border: #2a2a2a;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--nero);
+      color: var(--crema);
+      font-family: 'DM Sans', sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ====== NOISE TEXTURE OVERLAY ====== */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ====== NAV ====== */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      padding: 1.2rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: rgba(10,10,10,0.85);
+      backdrop-filter: blur(12px);
+    }
+
+    .nav-logo {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.4rem;
+      color: var(--oro);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    .nav-links { display: flex; gap: 1rem; }
+
+    .nav-btn {
+      padding: 0.5rem 1.2rem;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--crema);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.85rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: all 0.2s;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .nav-btn:hover, .nav-btn.active {
+      border-color: var(--oro);
+      color: var(--oro);
+    }
+
+    .nav-btn.primary {
+      background: var(--oro);
+      color: var(--nero);
+      border-color: var(--oro);
+      font-weight: 500;
+    }
+
+    .nav-btn.primary:hover { background: var(--oro-chiaro); }
+
+    /* ====== SECTIONS ====== */
+    section { display: none; position: relative; z-index: 1; }
+    section.active { display: block; }
+
+    /* ====== HERO ====== */
+    #hero {
+      min-height: 100vh;
+      display: none;
+      flex-direction: column;
+    }
+    #hero.active { display: flex; }
+
+    .hero-main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      padding: 8rem 2rem 4rem;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+      gap: 4rem;
+    }
+
+    .hero-text { flex: 1; }
+
+    .hero-eyebrow {
+      font-size: 0.75rem;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      color: var(--oro);
+      margin-bottom: 1.5rem;
+    }
+
+    .hero-title {
+      font-family: 'Playfair Display', serif;
+      font-size: clamp(3rem, 7vw, 6rem);
+      line-height: 1.05;
+      font-weight: 900;
+      margin-bottom: 1.5rem;
+    }
+
+    .hero-title span { color: var(--oro); }
+
+    .hero-subtitle {
+      font-size: 1.1rem;
+      color: var(--grigio);
+      max-width: 420px;
+      line-height: 1.7;
+      margin-bottom: 2.5rem;
+      font-weight: 300;
+    }
+
+    .hero-cta {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      padding: 1rem 2.5rem;
+      background: var(--oro);
+      color: var(--nero);
+      border: none;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      transition: all 0.25s;
+      border-radius: 2px;
+    }
+
+    .btn-primary:hover { background: var(--oro-chiaro); transform: translateY(-2px); }
+
+    .btn-secondary {
+      padding: 1rem 2.5rem;
+      background: transparent;
+      color: var(--crema);
+      border: 1px solid var(--border);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9rem;
+      cursor: pointer;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      transition: all 0.25s;
+      border-radius: 2px;
+    }
+
+    .btn-secondary:hover { border-color: var(--oro); color: var(--oro); }
+
+    /* Decorative scissors illustration */
+    .hero-visual {
+      flex: 0 0 300px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hero-emblem {
+      width: 260px;
+      height: 260px;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 7rem;
+      position: relative;
+      animation: float 4s ease-in-out infinite;
+    }
+
+    .hero-emblem::before {
+      content: '';
+      position: absolute;
+      inset: -8px;
+      border-radius: 50%;
+      border: 1px solid rgba(201,168,76,0.2);
+    }
+
+    .hero-emblem::after {
+      content: '';
+      position: absolute;
+      inset: -16px;
+      border-radius: 50%;
+      border: 1px solid rgba(201,168,76,0.08);
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-12px); }
+    }
+
+    /* ====== SERVICES STRIP ====== */
+    .services-strip {
+      border-top: 1px solid var(--border);
+      padding: 3rem 2rem;
+      background: var(--card-bg);
+    }
+
+    .services-grid {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 2rem;
+    }
+
+    .service-item {
+      text-align: center;
+      padding: 2rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      transition: border-color 0.2s;
+    }
+
+    .service-item:hover { border-color: var(--oro); }
+
+    .service-icon { font-size: 2rem; margin-bottom: 0.75rem; }
+
+    .service-name {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.1rem;
+      margin-bottom: 0.4rem;
+    }
+
+    .service-price {
+      color: var(--oro);
+      font-size: 0.9rem;
+      letter-spacing: 1px;
+    }
+
+    /* ====== AUTH SECTIONS ====== */
+    .auth-wrapper {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6rem 1rem 2rem;
+    }
+
+    .auth-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3rem;
+      width: 100%;
+      max-width: 440px;
+    }
+
+    .auth-header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+
+    .auth-icon { font-size: 2.5rem; margin-bottom: 1rem; }
+
+    .auth-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .auth-subtitle { color: var(--grigio); font-size: 0.9rem; }
+
+    .form-group { margin-bottom: 1.25rem; }
+
+    .form-label {
+      display: block;
+      font-size: 0.75rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--grigio);
+      margin-bottom: 0.5rem;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 0.9rem 1rem;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--crema);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+
+    .form-input:focus {
+      outline: none;
+      border-color: var(--oro);
+    }
+
+    .form-input::placeholder { color: #444; }
+
+    .form-btn {
+      width: 100%;
+      padding: 1rem;
+      background: var(--oro);
+      color: var(--nero);
+      border: none;
+      border-radius: 4px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 0.5rem;
+    }
+
+    .form-btn:hover:not(:disabled) { background: var(--oro-chiaro); transform: translateY(-1px); }
+    .form-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .form-error {
+      color: #e05555;
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+      min-height: 1.2em;
+    }
+
+    .auth-switch {
+      text-align: center;
+      margin-top: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--grigio);
+    }
+
+    .auth-switch a {
+      color: var(--oro);
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .auth-switch a:hover { color: var(--oro-chiaro); }
+
+    /* ====== CARTA FEDELTÀ ====== */
+    #carta {
+      min-height: 100vh;
+      padding: 7rem 1rem 3rem;
+    }
+
+    .carta-wrapper {
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    .carta-header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .carta-saluto {
+      font-size: 0.8rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--grigio);
+      margin-bottom: 0.4rem;
+    }
+
+    .carta-nome-utente {
+      font-family: 'Playfair Display', serif;
+      font-size: 2rem;
+      color: var(--crema);
+    }
+
+    /* LA CARD FISICA */
+    .loyalty-card {
+      background: linear-gradient(135deg, #1a1a1a 0%, #111 50%, #1a1408 100%);
+      border: 1px solid rgba(201,168,76,0.3);
+      border-radius: 16px;
+      padding: 2rem;
+      position: relative;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(201,168,76,0.1);
+    }
+
+    .loyalty-card::before {
+      content: '';
+      position: absolute;
+      top: -40px; right: -40px;
+      width: 180px; height: 180px;
+      border-radius: 50%;
+      border: 1px solid rgba(201,168,76,0.08);
+    }
+
+    .loyalty-card::after {
+      content: '';
+      position: absolute;
+      top: -60px; right: -60px;
+      width: 240px; height: 240px;
+      border-radius: 50%;
+      border: 1px solid rgba(201,168,76,0.04);
+    }
+
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1.5rem;
+    }
+
+    .card-salone-nome {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.3rem;
+      color: var(--oro);
+      letter-spacing: 1px;
+    }
+
+    .card-scissors { font-size: 1.5rem; opacity: 0.6; }
+
+    .card-owner {
+      margin-bottom: 1.5rem;
+    }
+
+    .card-owner-label {
+      font-size: 0.65rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--grigio);
+      margin-bottom: 0.25rem;
+    }
+
+    .card-owner-name {
+      font-size: 1.1rem;
+      font-weight: 500;
+      color: var(--crema);
+    }
+
+    .card-owner-phone {
+      font-size: 0.8rem;
+      color: var(--grigio);
+      margin-top: 0.1rem;
+    }
+
+    /* TIMBRI GRID */
+    #timbri-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0.6rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stamp {
+      aspect-ratio: 1;
+      border: 1.5px solid var(--border);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      transition: all 0.3s;
+      animation: stampReveal 0.4s ease both;
+    }
+
+    @keyframes stampReveal {
+      from { transform: scale(0.5); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    .stamp.stamped {
+      border-color: var(--oro);
+      background: rgba(201,168,76,0.12);
+      color: var(--oro);
+      box-shadow: 0 0 12px rgba(201,168,76,0.2);
+    }
+
+    .stamp.empty { color: transparent; }
+
+    /* PROGRESS */
+    .progress-section { margin-bottom: 0.5rem; }
+
+    .progress-info {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--grigio);
+      margin-bottom: 0.5rem;
+    }
+
+    .progress-track {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--oro), var(--oro-chiaro));
+      border-radius: 2px;
+      transition: width 0.8s ease;
+    }
+
+    /* REWARD BANNER */
+    #reward-banner {
+      display: none;
+      align-items: center;
+      gap: 1rem;
+      background: rgba(201,168,76,0.12);
+      border: 1px solid rgba(201,168,76,0.4);
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      margin-bottom: 1rem;
+      animation: pulseGold 2s ease-in-out infinite;
+    }
+
+    @keyframes pulseGold {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(201,168,76,0.2); }
+      50% { box-shadow: 0 0 20px 4px rgba(201,168,76,0.15); }
+    }
+
+    .reward-content { flex: 1; }
+    .reward-title { font-size: 0.7rem; letter-spacing: 2px; text-transform: uppercase; color: var(--oro); margin-bottom: 0.2rem; }
+    .reward-desc { font-size: 1rem; font-weight: 500; }
+
+    .mancano-text {
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--grigio);
+      margin-bottom: 1.5rem;
+    }
+
+    /* PRIZE LABEL ON CARD */
+    .card-prize {
+      font-size: 0.65rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--grigio);
+    }
+
+    .card-prize span {
+      color: var(--oro);
+      font-weight: 500;
+    }
+
+    /* LOGOUT */
+    .logout-btn {
+      display: block;
+      width: 100%;
+      padding: 0.8rem;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--grigio);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.8rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.2s;
+      margin-top: 1rem;
+    }
+
+    .logout-btn:hover { border-color: #555; color: var(--crema); }
+
+    /* ====== MOBILE ====== */
+    @media (max-width: 768px) {
+      .hero-visual { display: none; }
+      .hero-main { flex-direction: column; padding-top: 7rem; }
+      .auth-card { padding: 2rem 1.5rem; }
+      nav { padding: 1rem; }
+      .nav-logo { font-size: 1.1rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- NAV -->
+  <nav>
+    <div class="nav-logo salone-nome">BarberClub</div>
+    <div class="nav-links" id="nav-links">
+      <button class="nav-btn" onclick="showSection('registrazione')">Registrati</button>
+      <button class="nav-btn primary" onclick="showSection('login')">La mia carta</button>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section id="hero" class="active">
+    <div class="hero-main">
+      <div class="hero-text">
+        <p class="hero-eyebrow">✦ Carta Fedeltà Digitale</p>
+        <h1 class="hero-title">Il tuo<br>stile <span>premiato</span></h1>
+        <p class="hero-subtitle">Accumula timbri ad ogni visita e sblocca premi esclusivi. Niente tessere da perdere — tutto sul tuo telefono.</p>
+        <div class="hero-cta">
+          <button class="btn-primary" onclick="showSection('registrazione')">Inizia ora</button>
+          <button class="btn-secondary" onclick="showSection('login')">Ho già un account</button>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="hero-emblem">✂️</div>
+      </div>
+    </div>
+
+    <div class="services-strip">
+      <div class="services-grid">
+        <div class="service-item">
+          <div class="service-icon">✂️</div>
+          <div class="service-name">Taglio Uomo</div>
+          <div class="service-price">da 15€</div>
+        </div>
+        <div class="service-item">
+          <div class="service-icon">🪒</div>
+          <div class="service-name">Barba</div>
+          <div class="service-price">da 10€</div>
+        </div>
+        <div class="service-item">
+          <div class="service-icon">💈</div>
+          <div class="service-name">Taglio + Barba</div>
+          <div class="service-price">da 22€</div>
+        </div>
+        <div class="service-item">
+          <div class="service-icon">👦</div>
+          <div class="service-name">Taglio Bambino</div>
+          <div class="service-price">da 10€</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- REGISTRAZIONE -->
+  <section id="registrazione">
+    <div class="auth-wrapper">
+      <div class="auth-card">
+        <div class="auth-header">
+          <div class="auth-icon">✂️</div>
+          <h2 class="auth-title">Registrati</h2>
+          <p class="auth-subtitle">Crea la tua carta fedeltà digitale gratuita</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Nome e Cognome</label>
+          <input id="reg-nome" class="form-input" type="text" placeholder="Mario Rossi">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Numero di Telefono</label>
+          <input id="reg-telefono" class="form-input" type="tel" placeholder="333 1234567">
+        </div>
+        <button id="reg-btn" class="form-btn" onclick="registerCliente()">Registrati</button>
+        <p class="form-error" id="reg-error"></p>
+        <p class="auth-switch">Hai già un account? <a onclick="showSection('login')">Accedi</a></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOGIN -->
+  <section id="login">
+    <div class="auth-wrapper">
+      <div class="auth-card">
+        <div class="auth-header">
+          <div class="auth-icon">💈</div>
+          <h2 class="auth-title">La tua carta</h2>
+          <p class="auth-subtitle">Inserisci il tuo numero per vedere i timbri</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Numero di Telefono</label>
+          <input id="login-telefono" class="form-input" type="tel" placeholder="333 1234567">
+        </div>
+        <button id="login-btn" class="form-btn" onclick="loginCliente()">Accedi</button>
+        <p class="form-error" id="login-error"></p>
+        <p class="auth-switch">Non sei ancora registrato? <a onclick="showSection('registrazione')">Registrati</a></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CARTA FEDELTÀ -->
+  <section id="carta">
+    <div class="carta-wrapper">
+      <div class="carta-header">
+        <p class="carta-saluto">Benvenuto</p>
+        <h2 class="carta-nome-utente" id="carta-nome">—</h2>
+      </div>
+
+      <div id="reward-banner">
+        <div style="font-size:2rem">🏆</div>
+        <div class="reward-content">
+          <p class="reward-title">Premio sbloccato!</p>
+          <p class="reward-desc" id="reward-text"></p>
+        </div>
+      </div>
+
+      <div class="loyalty-card">
+        <div class="card-top">
+          <div class="card-salone-nome salone-nome" id="salone-nome-carta">BarberClub</div>
+          <div class="card-scissors">✂️</div>
+        </div>
+
+        <div class="card-owner">
+          <p class="card-owner-label">Titolare</p>
+          <p class="card-owner-name" id="carta-nome-2"></p>
+          <p class="card-owner-phone" id="carta-telefono"></p>
+        </div>
+
+        <div id="timbri-grid"></div>
+
+        <div class="progress-section">
+          <div class="progress-info">
+            <span><span id="timbri-count">0</span> / <span id="timbri-max">10</span> timbri</span>
+            <span>Premio: <span id="carta-sconto-label" style="color:var(--oro)">—</span></span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="progress-bar" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <p class="mancano-text" id="mancano-text"></p>
+
+      <button class="logout-btn" onclick="logout()">↩ Esci</button>
+    </div>
+  </section>
+
+  <script>
+    // Fix: sync nome on carta
+    const origShow = window.showCarta;
+
+    function showSection(id) {
+      document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+      const el = document.getElementById(id);
+      if (el) el.classList.add('active');
+      window.scrollTo(0, 0);
+
+      // nav visibility
+      const navLinks = document.getElementById('nav-links');
+      if (id === 'carta') {
+        navLinks.style.display = 'none';
+      } else {
+        navLinks.style.display = 'flex';
+      }
+    }
+
+    // Sync second nome field
+    const observer = new MutationObserver(() => {
+      const n = document.getElementById('carta-nome');
+      const n2 = document.getElementById('carta-nome-2');
+      if (n && n2) n2.textContent = n.textContent;
+    });
+    observer.observe(document.getElementById('carta-nome'), { childList: true, characterData: true, subtree: true });
+  </script>
+</body>
+</html>

@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — BarberClub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // =============================================
+    // 🔧 SOSTITUISCI CON LA TUA CONFIGURAZIONE FIREBASE
+    // =============================================
+    const firebaseConfig = {
+      apiKey: "LA_TUA_API_KEY",
+      authDomain: "IL_TUO_PROGETTO.firebaseapp.com",
+      projectId: "IL_TUO_PROGETTO",
+      storageBucket: "IL_TUO_PROGETTO.appspot.com",
+      messagingSenderId: "IL_TUO_SENDER_ID",
+      appId: "IL_TUO_APP_ID"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Password admin (cambia questa!)
+    const ADMIN_PASSWORD = "barbiere2024";
+
+    let allClienti = [];
+    let settings = {};
+
+    // =============================================
+    // LOGIN ADMIN
+    // =============================================
+    window.adminLogin = function() {
+      const pwd = document.getElementById('admin-pwd').value;
+      if (pwd === ADMIN_PASSWORD) {
+        sessionStorage.setItem('admin_logged', '1');
+        showPanel();
+      } else {
+        document.getElementById('login-error').textContent = 'Password errata.';
+      }
+    };
+
+    window.adminLogout = function() {
+      sessionStorage.removeItem('admin_logged');
+      location.reload();
+    };
+
+    // =============================================
+    // LOAD SETTINGS
+    // =============================================
+    async function loadSettings() {
+      const snap = await getDoc(doc(db, 'settings', 'config'));
+      if (snap.exists()) {
+        settings = snap.data();
+      } else {
+        settings = { maxTimbri: 10, sconto: 'Taglio gratis', nomeSalone: 'BarberClub' };
+        await setDoc(doc(db, 'settings', 'config'), settings);
+      }
+      document.getElementById('set-nome').value = settings.nomeSalone || 'BarberClub';
+      document.getElementById('set-sconto').value = settings.sconto || 'Taglio gratis';
+      document.getElementById('set-max').value = settings.maxTimbri || 10;
+    }
+
+    window.saveSettings = async function() {
+      const nomeSalone = document.getElementById('set-nome').value.trim();
+      const sconto = document.getElementById('set-sconto').value.trim();
+      const maxTimbri = parseInt(document.getElementById('set-max').value) || 10;
+
+      if (!nomeSalone || !sconto) { alert('Compila tutti i campi.'); return; }
+
+      const btn = document.getElementById('save-settings-btn');
+      btn.disabled = true; btn.textContent = 'Salvataggio...';
+
+      await setDoc(doc(db, 'settings', 'config'), { nomeSalone, sconto, maxTimbri });
+      settings = { nomeSalone, sconto, maxTimbri };
+
+      btn.disabled = false; btn.textContent = '✓ Salvato!';
+      setTimeout(() => { btn.textContent = 'Salva impostazioni'; }, 2000);
+
+      document.querySelectorAll('.salone-nome-admin').forEach(el => el.textContent = nomeSalone);
+    };
+
+    // =============================================
+    // LOAD CLIENTI
+    // =============================================
+    async function loadClienti() {
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('clienti-list').innerHTML = '';
+
+      const snap = await getDocs(collection(db, 'clienti'));
+      allClienti = [];
+      snap.forEach(d => allClienti.push({ id: d.id, ...d.data() }));
+      allClienti.sort((a, b) => a.nome.localeCompare(b.nome));
+
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('total-clienti').textContent = allClienti.length;
+
+      renderClienti(allClienti);
+    }
+
+    function renderClienti(list) {
+      const container = document.getElementById('clienti-list');
+      container.innerHTML = '';
+
+      if (list.length === 0) {
+        container.innerHTML = '<p class="empty-state">Nessun cliente trovato.</p>';
+        return;
+      }
+
+      list.forEach(cliente => {
+        const max = settings.maxTimbri || 10;
+        const pct = Math.min(100, Math.round((cliente.timbri / max) * 100));
+        const isReady = cliente.timbri >= max;
+
+        const card = document.createElement('div');
+        card.className = 'cliente-card' + (isReady ? ' ready' : '');
+        card.innerHTML = `
+          <div class="cliente-main">
+            <div class="cliente-avatar">${cliente.nome.charAt(0).toUpperCase()}</div>
+            <div class="cliente-info">
+              <div class="cliente-nome">${cliente.nome} ${isReady ? '<span class="badge-prize">🏆 Premio!</span>' : ''}</div>
+              <div class="cliente-tel">📱 ${cliente.telefono}</div>
+              <div class="timbri-mini">
+                ${Array.from({length: max}, (_, i) =>
+                  `<span class="mini-stamp ${i < cliente.timbri ? 'on' : ''}"></span>`
+                ).join('')}
+              </div>
+            </div>
+            <div class="cliente-count">
+              <span class="count-num">${cliente.timbri}</span>
+              <span class="count-label">/ ${max}</span>
+            </div>
+          </div>
+          <div class="cliente-actions">
+            <button class="action-btn timbra" onclick="timbra('${cliente.id}', '${cliente.nome}')" ${isReady ? 'disabled title="Applica prima lo sconto"' : ''}>
+              ✂ Timbra
+            </button>
+            <button class="action-btn sconto ${!isReady ? 'disabled' : ''}" onclick="applicaSconto('${cliente.id}', '${cliente.nome}')" ${!isReady ? 'disabled' : ''}>
+              🎁 Applica sconto
+            </button>
+            <button class="action-btn danger" onclick="deleteCliente('${cliente.id}', '${cliente.nome}')">
+              🗑
+            </button>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    // =============================================
+    // TIMBRA
+    // =============================================
+    window.timbra = async function(telefono, nome) {
+      const cliente = allClienti.find(c => c.id === telefono);
+      if (!cliente) return;
+
+      const max = settings.maxTimbri || 10;
+      if (cliente.timbri >= max) {
+        alert('Il cliente ha già raggiunto il premio. Applica prima lo sconto.');
+        return;
+      }
+
+      const nuovi = cliente.timbri + 1;
+      await updateDoc(doc(db, 'clienti', telefono), {
+        timbri: nuovi,
+        dataUltimoTimbro: new Date().toISOString()
+      });
+
+      showToast(`✂ Timbrato! ${nome} ha ${nuovi}/${max} timbri`);
+      if (nuovi >= max) showToast(`🏆 ${nome} ha raggiunto il premio!`, 'gold');
+
+      await loadClienti();
+      filterClienti();
+    };
+
+    // =============================================
+    // APPLICA SCONTO (azzera)
+    // =============================================
+    window.applicaSconto = async function(telefono, nome) {
+      if (!confirm(`Confermi di aver applicato lo sconto a ${nome}? I timbri verranno azzerati.`)) return;
+
+      await updateDoc(doc(db, 'clienti', telefono), {
+        timbri: 0,
+        dataUltimoSconto: new Date().toISOString()
+      });
+
+      showToast(`🎁 Sconto applicato a ${nome}. Timbri azzerati!`, 'gold');
+      await loadClienti();
+      filterClienti();
+    };
+
+    // =============================================
+    // ELIMINA CLIENTE
+    // =============================================
+    window.deleteCliente = async function(telefono, nome) {
+      if (!confirm(`Eliminare definitivamente ${nome}?`)) return;
+      await deleteDoc(doc(db, 'clienti', telefono));
+      showToast(`🗑 ${nome} eliminato.`);
+      await loadClienti();
+      filterClienti();
+    };
+
+    // =============================================
+    // FILTRO
+    // =============================================
+    window.filterClienti = function() {
+      const q = document.getElementById('search-input').value.toLowerCase();
+      const filtered = allClienti.filter(c =>
+        c.nome.toLowerCase().includes(q) || c.telefono.includes(q)
+      );
+      renderClienti(filtered);
+    };
+
+    // =============================================
+    // TOAST
+    // =============================================
+    function showToast(msg, type = 'default') {
+      const t = document.createElement('div');
+      t.className = 'toast ' + type;
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(() => t.classList.add('show'), 10);
+      setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 3000);
+    }
+
+    // =============================================
+    // SHOW PANEL
+    // =============================================
+    async function showPanel() {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('admin-panel').style.display = 'block';
+      await loadSettings();
+      await loadClienti();
+    }
+
+    // =============================================
+    // INIT
+    // =============================================
+    window.addEventListener('DOMContentLoaded', () => {
+      if (sessionStorage.getItem('admin_logged')) {
+        showPanel();
+      }
+
+      document.getElementById('admin-pwd').addEventListener('keydown', e => {
+        if (e.key === 'Enter') adminLogin();
+      });
+
+      document.getElementById('search-input').addEventListener('input', filterClienti);
+    });
+
+    window.showTab = function(tab) {
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('tab-' + tab).classList.add('active');
+      document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+    };
+  </script>
+
+  <style>
+    :root {
+      --nero: #0a0a0a;
+      --oro: #c9a84c;
+      --oro-chiaro: #e8c96e;
+      --crema: #f5f0e8;
+      --grigio: #888;
+      --card-bg: #141414;
+      --border: #2a2a2a;
+      --danger: #e05555;
+      --success: #4caf7d;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--nero);
+      color: var(--crema);
+      font-family: 'DM Sans', sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ====== LOGIN ====== */
+    #login-screen {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .login-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 3rem;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+
+    .login-icon { font-size: 3rem; margin-bottom: 1rem; }
+
+    .login-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.8rem;
+      color: var(--oro);
+      margin-bottom: 0.5rem;
+    }
+
+    .login-sub { color: var(--grigio); font-size: 0.85rem; margin-bottom: 2rem; }
+
+    .login-input {
+      width: 100%;
+      padding: 0.9rem 1rem;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--crema);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 1rem;
+      text-align: center;
+      letter-spacing: 3px;
+      margin-bottom: 1rem;
+    }
+
+    .login-input:focus { outline: none; border-color: var(--oro); }
+
+    .login-btn {
+      width: 100%;
+      padding: 1rem;
+      background: var(--oro);
+      color: var(--nero);
+      border: none;
+      border-radius: 6px;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 500;
+      font-size: 0.9rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .login-btn:hover { background: var(--oro-chiaro); }
+    .login-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
+
+    /* ====== ADMIN PANEL ====== */
+    #admin-panel { display: none; }
+
+    .admin-header {
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .admin-logo {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.2rem;
+      color: var(--oro);
+    }
+
+    .admin-logo span { color: var(--grigio); font-size: 0.75rem; font-family: 'DM Sans', sans-serif; letter-spacing: 2px; text-transform: uppercase; margin-left: 0.5rem; }
+
+    .logout-btn {
+      padding: 0.5rem 1rem;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--grigio);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.75rem;
+      letter-spacing: 1px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+
+    .logout-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+    /* TABS */
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--card-bg);
+      padding: 0 2rem;
+    }
+
+    .tab-btn {
+      padding: 1rem 1.5rem;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--grigio);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.85rem;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-transform: uppercase;
+    }
+
+    .tab-btn:hover { color: var(--crema); }
+    .tab-btn.active { color: var(--oro); border-bottom-color: var(--oro); }
+
+    .tab-content { display: none; padding: 2rem; max-width: 1000px; margin: 0 auto; }
+    .tab-content.active { display: block; }
+
+    /* STATS */
+    .stats-bar {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .stat-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.75rem;
+      flex: 1;
+      min-width: 140px;
+    }
+
+    .stat-label { font-size: 0.7rem; letter-spacing: 2px; text-transform: uppercase; color: var(--grigio); margin-bottom: 0.4rem; }
+    .stat-value { font-family: 'Playfair Display', serif; font-size: 2rem; color: var(--oro); }
+
+    /* SEARCH */
+    .search-bar {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .search-input {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--crema);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.95rem;
+    }
+
+    .search-input:focus { outline: none; border-color: var(--oro); }
+    .search-input::placeholder { color: #444; }
+
+    /* CLIENTI CARDS */
+    #clienti-list { display: flex; flex-direction: column; gap: 0.75rem; }
+
+    .cliente-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      transition: border-color 0.2s;
+    }
+
+    .cliente-card:hover { border-color: #444; }
+    .cliente-card.ready { border-color: rgba(201,168,76,0.4); background: rgba(201,168,76,0.04); }
+
+    .cliente-main {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .cliente-avatar {
+      width: 44px; height: 44px;
+      background: rgba(201,168,76,0.12);
+      border: 1px solid rgba(201,168,76,0.3);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Playfair Display', serif;
+      font-size: 1.2rem;
+      color: var(--oro);
+      flex-shrink: 0;
+    }
+
+    .cliente-info { flex: 1; min-width: 0; }
+
+    .cliente-nome {
+      font-weight: 500;
+      font-size: 1rem;
+      margin-bottom: 0.2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .badge-prize {
+      font-size: 0.7rem;
+      background: rgba(201,168,76,0.15);
+      color: var(--oro);
+      padding: 0.2rem 0.5rem;
+      border-radius: 20px;
+      border: 1px solid rgba(201,168,76,0.3);
+    }
+
+    .cliente-tel { font-size: 0.8rem; color: var(--grigio); margin-bottom: 0.5rem; }
+
+    .timbri-mini { display: flex; gap: 3px; flex-wrap: wrap; }
+
+    .mini-stamp {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--border);
+      transition: background 0.2s;
+    }
+
+    .mini-stamp.on { background: var(--oro); }
+
+    .cliente-count {
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .count-num {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.8rem;
+      color: var(--oro);
+      line-height: 1;
+    }
+
+    .count-label { font-size: 0.75rem; color: var(--grigio); }
+
+    .cliente-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .action-btn {
+      padding: 0.55rem 1.2rem;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--crema);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.8rem;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+
+    .action-btn.timbra:hover:not(:disabled) { border-color: var(--oro); color: var(--oro); background: rgba(201,168,76,0.08); }
+    .action-btn.sconto:hover:not(:disabled) { border-color: var(--success); color: var(--success); background: rgba(76,175,125,0.08); }
+    .action-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+    .action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* SETTINGS */
+    .settings-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      max-width: 500px;
+    }
+
+    .settings-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.3rem;
+      margin-bottom: 1.5rem;
+      color: var(--oro);
+    }
+
+    .setting-group { margin-bottom: 1.25rem; }
+    .setting-label { display: block; font-size: 0.75rem; letter-spacing: 2px; text-transform: uppercase; color: var(--grigio); margin-bottom: 0.5rem; }
+    .setting-input {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--crema);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 1rem;
+    }
+    .setting-input:focus { outline: none; border-color: var(--oro); }
+
+    .save-btn {
+      padding: 0.9rem 2rem;
+      background: var(--oro);
+      color: var(--nero);
+      border: none;
+      border-radius: 6px;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 500;
+      font-size: 0.85rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-top: 0.5rem;
+    }
+
+    .save-btn:hover:not(:disabled) { background: var(--oro-chiaro); }
+    .save-btn:disabled { opacity: 0.5; }
+
+    .setting-hint { font-size: 0.75rem; color: var(--grigio); margin-top: 0.4rem; }
+
+    /* LOADING */
+    #loading { text-align: center; color: var(--grigio); padding: 2rem; display: none; }
+    .empty-state { text-align: center; color: var(--grigio); padding: 3rem; }
+
+    /* TOAST */
+    .toast {
+      position: fixed;
+      bottom: 2rem; right: 2rem;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--crema);
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s;
+      z-index: 999;
+      max-width: 320px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    }
+
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.gold { border-color: var(--oro); color: var(--oro); }
+
+    @media (max-width: 600px) {
+      .tab-content { padding: 1rem; }
+      .admin-header { padding: 1rem; }
+      .tabs { padding: 0 1rem; overflow-x: auto; }
+      .stats-bar { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- LOGIN -->
+  <div id="login-screen">
+    <div class="login-card">
+      <div class="login-icon">🔐</div>
+      <h1 class="login-title">Pannello Admin</h1>
+      <p class="login-sub">Accesso riservato al barbiere</p>
+      <input id="admin-pwd" class="login-input" type="password" placeholder="••••••••">
+      <button class="login-btn" onclick="adminLogin()">Accedi</button>
+      <p class="login-error" id="login-error"></p>
+    </div>
+  </div>
+
+  <!-- ADMIN PANEL -->
+  <div id="admin-panel">
+    <div class="admin-header">
+      <div class="admin-logo salone-nome-admin">BarberClub <span>Admin</span></div>
+      <button class="logout-btn" onclick="adminLogout()">Esci</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="clienti" onclick="showTab('clienti')">Clienti</button>
+      <button class="tab-btn" data-tab="impostazioni" onclick="showTab('impostazioni')">Impostazioni</button>
+    </div>
+
+    <!-- TAB CLIENTI -->
+    <div id="tab-clienti" class="tab-content active">
+      <div class="stats-bar">
+        <div class="stat-box">
+          <div class="stat-label">Clienti totali</div>
+          <div class="stat-value" id="total-clienti">—</div>
+        </div>
+      </div>
+
+      <div class="search-bar">
+        <input id="search-input" class="search-input" type="text" placeholder="🔍 Cerca per nome o telefono...">
+      </div>
+
+      <div id="loading">Caricamento clienti...</div>
+      <div id="clienti-list"></div>
+    </div>
+
+    <!-- TAB IMPOSTAZIONI -->
+    <div id="tab-impostazioni" class="tab-content">
+      <div class="settings-card">
+        <h2 class="settings-title">⚙️ Impostazioni salone</h2>
+
+        <div class="setting-group">
+          <label class="setting-label">Nome del salone</label>
+          <input id="set-nome" class="setting-input" type="text" placeholder="BarberClub">
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Premio (sconto) al completamento</label>
+          <input id="set-sconto" class="setting-input" type="text" placeholder="es. Taglio gratis, 5€ di sconto...">
+          <p class="setting-hint">Questo testo appare sulla carta fedeltà del cliente</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Numero di timbri per il premio</label>
+          <input id="set-max" class="setting-input" type="number" min="1" max="50" value="10">
+          <p class="setting-hint">Di default 10 timbri = 1 premio</p>
+        </div>
+
+        <button id="save-settings-btn" class="save-btn" onclick="saveSettings()">Salva impostazioni</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
